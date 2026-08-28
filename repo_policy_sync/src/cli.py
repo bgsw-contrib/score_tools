@@ -285,8 +285,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_dirty_pr=allow_dirty_pr,
             sync_workers=sync_workers,
             policy_workers=policy_workers,
+            # apply already looks up an open PR itself whenever it might act on
+            # one, so this only buys the merged/closed history used for
+            # display, at the cost of extra `gh pr list` calls (a closed-state
+            # scan and, for a branch outside the label lookup, a per-branch
+            # collision check). Skip that in a bare apply run; still fetch it
+            # for plan (its only output) and for report files.
             include_pull_request_status=(
-                args.json_output is not None or args.markdown_output is not None
+                args.command == "plan"
+                or args.json_output is not None
+                or args.markdown_output is not None
             ),
             progress=_discard_progress if quiet else _write_progress,
         )

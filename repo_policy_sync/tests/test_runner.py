@@ -31,6 +31,7 @@ from repo_policy_sync.src.github import (
 from repo_policy_sync.src.models import (
     BazelCondition,
     EnsureLine,
+    FileExistsCondition,
     RemoveFile,
     Evaluation,
     Policy,
@@ -369,6 +370,125 @@ def test_runner_adds_policy_pull_request_status_for_markdown_reports(
 
     assert report.outcomes[0].policy_pr_status == "merged"
     assert report.outcomes[0].pull_request_url.endswith("/7")
+
+
+def test_runner_reports_a_pre_existing_closed_pull_request_for_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan surfaces a policy PR someone closed without merging, not just none."""
+    source = tmp_path / "repository"
+    source.mkdir()
+    policy = Policy(
+        "example", "Example", None, None, (EnsureLine(Path("required.txt"), "yes", ()),)
+    )
+    client = PolicyStatusClient(
+        source,
+        (Repository("candidate", "main"),),
+        PolicyPullRequestStatus(
+            closed=PullRequest(
+                8,
+                "https://github.example/owner/candidate/pull/8",
+                closed_at="2026-01-01",
+            )
+        ),
+    )
+    _install_fake_sync(monkeypatch, client)
+
+    report = run_policies(
+        client=client,
+        org="eclipse-score",
+        policies=(policy,),
+        repository_names=(),
+        checkout_cache_directory=tmp_path / "cache",
+        apply=False,
+        sync_workers=1,
+        policy_workers=1,
+        include_pull_request_status=True,
+    )
+
+    assert report.outcomes[0].policy_pr_status == "closed"
+    assert report.outcomes[0].pull_request_url.endswith("/8")
+    assert report.summary.pull_requests_closed == 0
+
+
+def test_runner_does_not_count_a_pre_existing_closed_pr_as_closed_by_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan reporting a historical closed PR must not claim this run closed one."""
+    source = tmp_path / "repository"
+    source.mkdir()
+    policy = Policy(
+        "example",
+        "Example",
+        None,
+        None,
+        (),
+        file_exists_condition=FileExistsCondition(Path("does-not-exist")),
+    )
+    client = PolicyStatusClient(
+        source,
+        (Repository("candidate", "main"),),
+        PolicyPullRequestStatus(
+            closed=PullRequest(
+                8,
+                "https://github.example/owner/candidate/pull/8",
+                closed_at="2026-01-01",
+            )
+        ),
+    )
+    _install_fake_sync(monkeypatch, client)
+
+    report = run_policies(
+        client=client,
+        org="eclipse-score",
+        policies=(policy,),
+        repository_names=(),
+        checkout_cache_directory=tmp_path / "cache",
+        apply=False,
+        sync_workers=1,
+        policy_workers=1,
+        include_pull_request_status=True,
+    )
+
+    assert report.outcomes[0].status == "not-applicable"
+    assert report.outcomes[0].policy_pr_status == "closed"
+    assert report.summary.pull_requests_closed == 0
+
+
+def test_runner_reports_pull_request_status_when_policy_is_not_applicable(
+    tmp_path: Path,
+) -> None:
+    """Plan reports an existing PR even when the live policy no longer applies."""
+    policy = Policy(
+        "example",
+        "Example",
+        None,
+        None,
+        (),
+        file_exists_condition=FileExistsCondition(Path("does-not-exist")),
+    )
+    client = PolicyStatusClient(
+        tmp_path,
+        (Repository("repo", "main"),),
+        PolicyPullRequestStatus(
+            open=PullRequest(1, "https://github.example/owner/repo/pull/1")
+        ),
+    )
+
+    outcome = _run_repository(
+        client=client,
+        org="eclipse-score",
+        repository="repo",
+        default_branch="main",
+        policy=policy,
+        checkout=tmp_path,
+        apply=False,
+        include_pull_request_status=True,
+    )
+
+    assert outcome.status == "not-applicable"
+    assert outcome.policy_pr_status == "open"
+    assert outcome.pull_request_url == "https://github.example/owner/repo/pull/1"
 
 
 def test_runner_counts_closed_pull_requests_as_compliant(

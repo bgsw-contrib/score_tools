@@ -28,6 +28,10 @@ from .errors import CommandError, redact_sensitive_text
 from .models import Change, Policy, policy_branch_slug
 
 TOOL_SLUG = "repo-policy-sync"
+# PRs created by the previous implementation used this slug in their body and
+# branch names.  Keep accepting it while the label remains the stable tool
+# ownership signal.
+LEGACY_TOOL_SLUG = "repo-sync"
 AUTOMATION_LABELS = ("automation", TOOL_SLUG)
 AUTOMATION_LABEL_COLOR = "EDEDED"
 _PRE_COMMIT_ENVIRONMENT_KEYS = {
@@ -52,6 +56,7 @@ class PullRequest:
     warnings: tuple[str, ...] = ()
     branch: str = ""
     merged_at: str | None = None
+    closed_at: str | None = None
     body: str | None = None
     mergeable: str | None = None
 
@@ -62,6 +67,7 @@ class PolicyPullRequestStatus:
 
     open: PullRequest | None = None
     merged: PullRequest | None = None
+    closed: PullRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -107,7 +113,7 @@ class GitHubCli:
         policy_id: str,
         legacy_policy_ids: tuple[str, ...] = (),
     ) -> PolicyPullRequestStatus:
-        """Find the open PR and latest merged PR owned by a repository policy."""
+        """Find the open, latest merged, and latest closed PR owned by a policy."""
 
         open_pull_requests = self._find_policy_pull_requests(
             repository=repository,
@@ -121,12 +127,26 @@ class GitHubCli:
             raise CommandError(
                 f"multiple open pull requests match policy {policy_id} in {repository}: {urls}"
             )
-        merged_pull_requests = self._find_policy_pull_requests(
+        # `gh pr list --state closed` returns every non-open PR, merged ones
+        # included (GitHub's PR "state" only distinguishes open/closed; merged
+        # is a separate flag). One query covers both merged and closed history,
+        # classified below by whether `mergedAt` is set.
+        resolved_pull_requests = self._find_policy_pull_requests(
             repository=repository,
             branches=branches,
             policy_id=policy_id,
             legacy_policy_ids=legacy_policy_ids,
-            state="merged",
+            state="closed",
+        )
+        merged_pull_requests = tuple(
+            pull_request
+            for pull_request in resolved_pull_requests
+            if pull_request.merged_at is not None
+        )
+        closed_pull_requests = tuple(
+            pull_request
+            for pull_request in resolved_pull_requests
+            if pull_request.merged_at is None
         )
         latest_merged = max(
             merged_pull_requests,
@@ -136,9 +156,18 @@ class GitHubCli:
             ),
             default=None,
         )
+        latest_closed = max(
+            closed_pull_requests,
+            key=lambda pull_request: (
+                pull_request.closed_at or "",
+                pull_request.number,
+            ),
+            default=None,
+        )
         return PolicyPullRequestStatus(
             open=open_pull_requests[0] if open_pull_requests else None,
             merged=latest_merged,
+            closed=latest_closed,
         )
 
     def _find_policy_pull_requests(
@@ -150,18 +179,124 @@ class GitHubCli:
         legacy_policy_ids: tuple[str, ...],
         state: str,
     ) -> tuple[PullRequest, ...]:
-        """Find policy-owned PRs in one GitHub state across its branch."""
+        """Find policy-owned PRs in one GitHub state using the tool label."""
 
         owned: list[PullRequest] = []
-        accepted_markers = {
-            _policy_marker(identifier) for identifier in (policy_id, *legacy_policy_ids)
-        }
-        fields = (
-            "number,url,body,mergedAt"
-            if state == "merged"
-            else "number,url,body,mergeable"
+        accepted_markers = _policy_markers((policy_id, *legacy_policy_ids))
+        if state == "closed":
+            fields = "number,url,body,headRefName,mergedAt,closedAt"
+        else:
+            fields = "number,url,body,headRefName,mergeable"
+        output = self._run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repository,
+                "--label",
+                TOOL_SLUG,
+                "--state",
+                state,
+                "--limit",
+                "1000",
+                "--json",
+                fields,
+            ]
         )
+        try:
+            pull_requests = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise CommandError(
+                f"gh returned invalid pull-request JSON for {repository}"
+            ) from exc
+        if not isinstance(pull_requests, list):
+            raise CommandError(
+                f"gh returned invalid pull-request JSON for {repository}"
+            )
+        for pull_request in pull_requests:
+            if not isinstance(pull_request, dict):
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            raw_body = pull_request.get("body", "")
+            body = "" if raw_body is None else raw_body
+            branch = pull_request.get("headRefName")
+            if not isinstance(body, str) or not isinstance(branch, str) or not branch:
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            if not any(marker in body for marker in accepted_markers):
+                if state == "open" and branch in branches:
+                    raise CommandError(
+                        f"refusing to reuse {repository} branch {branch}: its {state} pull request "
+                        f"is not owned by policy {policy_id}"
+                    )
+                # A labelled PR for another policy is expected in a repository
+                # that is managed by the tool; it is not ours to reuse.
+                continue
+            number = pull_request.get("number")
+            url = pull_request.get("url")
+            if not isinstance(number, int) or not isinstance(url, str):
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            merged_at = pull_request.get("mergedAt")
+            if merged_at is not None and not isinstance(merged_at, str):
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            closed_at = pull_request.get("closedAt")
+            if closed_at is not None and not isinstance(closed_at, str):
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            mergeable = pull_request.get("mergeable")
+            if mergeable is not None and not isinstance(mergeable, str):
+                raise CommandError(
+                    f"gh returned invalid pull-request JSON for {repository}"
+                )
+            owned.append(
+                PullRequest(
+                    number=number,
+                    url=url,
+                    expected_head_oid=_policy_head_marker_from_body(body),
+                    branch=branch,
+                    merged_at=merged_at,
+                    closed_at=closed_at,
+                    body=body,
+                    mergeable=mergeable,
+                )
+            )
+        if state == "open":
+            self._verify_no_unlabeled_branch_collision(
+                repository=repository,
+                branches=branches,
+                owned_branches={pull_request.branch for pull_request in owned},
+                policy_id=policy_id,
+            )
+        return tuple(owned)
+
+    def _verify_no_unlabeled_branch_collision(
+        self,
+        *,
+        repository: str,
+        branches: tuple[str, ...],
+        owned_branches: set[str],
+        policy_id: str,
+    ) -> None:
+        """Refuse to reuse an expected branch whose open PR lacks the tool label.
+
+        The `--label` lookup above cannot see a PR that never got the tool
+        label: a maintainer's own PR on the branch, or a tool-created PR whose
+        label application failed. Without this check either would be silently
+        invisible and a later apply could push over it or attempt a duplicate
+        pull request instead of refusing safely.
+        """
+
         for branch in branches:
+            if branch in owned_branches:
+                continue
             output = self._run(
                 [
                     "gh",
@@ -172,9 +307,9 @@ class GitHubCli:
                     "--head",
                     branch,
                     "--state",
-                    state,
+                    "open",
                     "--json",
-                    fields,
+                    "number",
                 ]
             )
             try:
@@ -187,54 +322,11 @@ class GitHubCli:
                 raise CommandError(
                     f"gh returned invalid pull-request JSON for {repository}"
                 )
-            for pull_request in pull_requests:
-                if not isinstance(pull_request, dict):
-                    raise CommandError(
-                        f"gh returned invalid pull-request JSON for {repository}"
-                    )
-                raw_body = pull_request.get("body", "")
-                body = "" if raw_body is None else raw_body
-                if not isinstance(body, str):
-                    raise CommandError(
-                        f"gh returned invalid pull-request JSON for {repository}"
-                    )
-                if not any(marker in body for marker in accepted_markers):
-                    if state == "merged":
-                        # Merged history may contain an unrelated PR from a
-                        # previous branch user; only an open PR can block reuse.
-                        continue
-                    raise CommandError(
-                        f"refusing to reuse {repository} branch {branch}: its {state} pull request "
-                        f"is not owned by policy {policy_id}"
-                    )
-                number = pull_request.get("number")
-                url = pull_request.get("url")
-                if not isinstance(number, int) or not isinstance(url, str):
-                    raise CommandError(
-                        f"gh returned invalid pull-request JSON for {repository}"
-                    )
-                merged_at = pull_request.get("mergedAt")
-                if merged_at is not None and not isinstance(merged_at, str):
-                    raise CommandError(
-                        f"gh returned invalid pull-request JSON for {repository}"
-                    )
-                mergeable = pull_request.get("mergeable")
-                if mergeable is not None and not isinstance(mergeable, str):
-                    raise CommandError(
-                        f"gh returned invalid pull-request JSON for {repository}"
-                    )
-                owned.append(
-                    PullRequest(
-                        number=number,
-                        url=url,
-                        expected_head_oid=_policy_head_marker_from_body(body),
-                        branch=branch,
-                        merged_at=merged_at,
-                        body=body,
-                        mergeable=mergeable,
-                    )
+            if pull_requests:
+                raise CommandError(
+                    f"refusing to reuse {repository} branch {branch}: its open pull "
+                    f"request is not owned by policy {policy_id}"
                 )
-        return tuple(owned)
 
     def switch_to_policy_branch(
         self, *, checkout: Path, branch: str, exists_remotely: bool
@@ -443,8 +535,15 @@ class GitHubCli:
         output = self._run(create_command).strip()
         if not output:
             raise CommandError(f"gh did not return a pull-request URL for {repository}")
+        # The tool label is the sole ownership signal `_find_policy_pull_requests`
+        # relies on, so a PR missing it would be invisible to every later run
+        # and could be duplicated or overwritten. Only the cosmetic "automation"
+        # label may fail without aborting.
         warnings: list[str] = []
         for label in AUTOMATION_LABELS:
+            if label == TOOL_SLUG:
+                self._run(["gh", "pr", "edit", output, "--add-label", label])
+                continue
             try:
                 self._run(["gh", "pr", "edit", output, "--add-label", label])
             except CommandError as exc:
@@ -625,12 +724,25 @@ def _policy_marker(policy_id: str) -> str:
     return f"<!-- {TOOL_SLUG}-policy: {policy_id} -->"
 
 
+def _policy_markers(policy_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """Return current and historical ownership markers for policy IDs."""
+
+    return tuple(
+        f"<!-- {tool_slug}-policy: {policy_id} -->"
+        for tool_slug in (TOOL_SLUG, LEGACY_TOOL_SLUG)
+        for policy_id in policy_ids
+    )
+
+
 def _policy_head_marker(head_oid: str) -> str:
     return f"<!-- {TOOL_SLUG}-head: {head_oid} -->"
 
 
 def _policy_head_marker_from_body(body: str) -> str | None:
-    match = re.search(rf"<!-- {re.escape(TOOL_SLUG)}-head: ([0-9a-f]{{40}}) -->", body)
+    tool_slugs = "|".join(
+        re.escape(tool_slug) for tool_slug in (TOOL_SLUG, LEGACY_TOOL_SLUG)
+    )
+    match = re.search(rf"<!-- (?:{tool_slugs})-head: ([0-9a-f]{{40}}) -->", body)
     return match.group(1) if match else None
 
 

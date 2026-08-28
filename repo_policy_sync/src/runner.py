@@ -169,6 +169,7 @@ class RepositoryOutcome:
     warnings: tuple[str, ...] = ()
     error: str | None = None
     policy_pr_status: str | None = None
+    pull_request_closed_by_run: bool = False
 
 
 def run_policies(
@@ -273,10 +274,7 @@ def run_policies(
                 "pull-request-recreated-no-changes",
             }:
                 pull_requests_recreated += 1
-            if outcome.status == "pull-request-closed" or (
-                outcome.status == "not-applicable"
-                and outcome.policy_pr_status == "closed"
-            ):
+            if outcome.pull_request_closed_by_run:
                 pull_requests_closed += 1
     return RunReport(
         RunSummary(
@@ -414,6 +412,15 @@ def _run_repository(
     include_pull_request_status: bool = False,
 ) -> RepositoryOutcome:
     full_name = f"{org}/{repository}"
+    policy_pr_status = (
+        _find_policy_pull_request_status(
+            client=client,
+            repository=full_name,
+            policy=policy,
+        )
+        if include_pull_request_status
+        else None
+    )
     try:
         evaluation = evaluate_policy(checkout, policy, organization=org)
     except RepoPolicySyncError as exc:
@@ -470,8 +477,16 @@ def _run_repository(
                     "not-applicable",
                     pull_request_url=existing_pr.url,
                     policy_pr_status="closed",
+                    pull_request_closed_by_run=True,
                 )
-        return RepositoryOutcome(repository, policy.id, "no (live)", "not-applicable")
+        return RepositoryOutcome(
+            repository,
+            policy.id,
+            "no (live)",
+            "not-applicable",
+            pull_request_url=_policy_pr_url(policy_pr_status),
+            policy_pr_status=_policy_pr_label(policy_pr_status),
+        )
     if recreate:
         return _recreate_repository(
             client=client,
@@ -482,15 +497,6 @@ def _run_repository(
             checkout=checkout,
             allow_dirty_pr=allow_dirty_pr,
         )
-    policy_pr_status = (
-        _find_policy_pull_request_status(
-            client=client,
-            repository=full_name,
-            policy=policy,
-        )
-        if include_pull_request_status
-        else None
-    )
     if not evaluation.changes:
         existing_pr = (
             policy_pr_status.open
@@ -521,6 +527,7 @@ def _run_repository(
                 "pull-request-closed",
                 pull_request_url=existing_pr.url,
                 policy_pr_status="closed",
+                pull_request_closed_by_run=True,
             )
         return RepositoryOutcome(
             repository,
@@ -734,13 +741,15 @@ def _policy_pr_label(status: PolicyPullRequestStatus | None) -> str | None:
         return "open"
     if status.merged is not None:
         return "merged"
+    if status.closed is not None:
+        return "closed"
     return "none"
 
 
 def _policy_pr_url(status: PolicyPullRequestStatus | None) -> str | None:
     if status is None:
         return None
-    pull_request = status.open or status.merged
+    pull_request = status.open or status.merged or status.closed
     return pull_request.url if pull_request is not None else None
 
 

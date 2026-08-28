@@ -13,8 +13,10 @@
 
 # How to run a policy
 
-Use plan mode first. It refreshes disposable local checkouts and reports drift,
-but never changes remote repositories:
+Use plan mode first. It refreshes disposable local checkouts, reports drift,
+and surfaces an actionable matching policy pull request (for example an open
+PR while changes are still required, or a merged/closed PR alongside current
+compliance), but never changes remote repositories:
 
 ```bash
 uv run score-repo-policy-sync plan --org eclipse-score

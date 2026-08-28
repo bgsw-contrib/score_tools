@@ -87,7 +87,12 @@ Policy options can be kept in the optional `score-repo-policy-sync.toml` file.
 Explicit CLI values override the file; see the
 [configuration reference](docs/reference/configuration.md).
 
-The CLI always prints a compact table to standard output. Pass
+The CLI always prints a compact table to standard output. Its status column
+shows the discovered policy pull-request state (`open`, `merged`, or `closed`)
+and number instead of the plain compliance status whenever that PR state is
+actionable — an open PR while changes are still required, or a merged/closed
+PR alongside current compliance; other combinations, including no matching
+PR, keep the plain compliance status. Pass
 `--json-output PATH` and/or `--markdown-output PATH` to write additional
 versioned JSON and Markdown reports during the same policy run. Markdown is
 suited for pull requests, issues, and wikis. Its cells use `✅` for compliant,
@@ -140,8 +145,10 @@ quadrants:
 The supported executable is `score-repo-policy-sync`. Policy IDs are the
 directory names containing each `policy.yml`, and policy-owned branches use
 the `repo-policy-sync/<policy-id>` naming scheme. The first version does not
-provide command aliases or historical policy-ID compatibility; update callers
-to the supported command and current policy IDs before rollout.
+provide command aliases; update callers to the supported command before
+rollout. Renaming a policy is supported by listing its former directory name
+in `legacy_names` (see Compatibility notes below) so the existing branch or
+pull request is located and updated instead of duplicated.
 
 ## First-version change summary
 
@@ -153,11 +160,11 @@ policy concurrency, and recovery from stale or conflicting policy branches.
 
 Compatibility notes:
 
-- Callers must use `score-repo-policy-sync`, `--policy-dir`, the current policy
-  IDs, and `repo-policy-sync/<policy-id>` branches. Legacy command aliases,
-  `--policy-directory`, and historical policy IDs are not supported.
-- Renaming a policy changes its branch and pull-request identity. Existing
-  policy branches or pull requests must be handled before adopting the new ID.
+- Callers must use `score-repo-policy-sync` and `--policy-dir`; legacy command
+  aliases and `--policy-directory` are not supported.
+- Policy migrations can list historical policy IDs in `legacy_names`. Matching
+  labelled historical pull requests are reported and can only be modified when
+  their body contains a verifiable branch-head marker.
 - The first version intentionally does not provide dynamic operation plugins,
   persistent result storage, generalized retries/rate-limit handling, or
   non-GitHub providers.
