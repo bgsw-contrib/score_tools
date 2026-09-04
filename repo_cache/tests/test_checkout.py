@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from repo_cache.src.checkout import restore_synced_default_branch, sync_default_branch
-from repo_cache.src.errors import CommandError
+from repo_cache.src.errors import CommandError, EmptyRepositoryError
 
 
 def test_cached_checkout_rejects_a_different_origin(
@@ -51,6 +51,8 @@ def test_sync_default_branch_clones_a_missing_checkout(
 
     def record(command: list[str]) -> str:
         commands.append(command)
+        if command[:2] == ["gh", "api"]:
+            return "1\n"
         return ""
 
     monkeypatch.setattr("repo_cache.src.checkout.run_command", record)
@@ -60,6 +62,13 @@ def test_sync_default_branch_clones_a_missing_checkout(
     )
 
     assert commands == [
+        [
+            "gh",
+            "api",
+            "/repos/owner/repository/git/refs?per_page=1",
+            "--jq",
+            "length",
+        ],
         [
             "gh",
             "repo",
@@ -81,6 +90,96 @@ def test_sync_default_branch_clones_a_missing_checkout(
             "HEAD",
         ],
     ]
+
+
+def test_sync_default_branch_reports_an_empty_repository(
+    monkeypatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "checkout"
+    commands: list[list[str]] = []
+
+    def record(command: list[str]) -> str:
+        commands.append(command)
+        raise CommandError(
+            "gh api /repos/owner/empty/git/refs: Git Repository is empty. (HTTP 409)"
+        )
+
+    monkeypatch.setattr("repo_cache.src.checkout.run_command", record)
+
+    with pytest.raises(EmptyRepositoryError, match="has no Git references"):
+        sync_default_branch(
+            repository="owner/empty", branch="main", destination=destination
+        )
+
+    assert commands == [
+        [
+            "gh",
+            "api",
+            "/repos/owner/empty/git/refs?per_page=1",
+            "--jq",
+            "length",
+        ]
+    ]
+
+
+def test_sync_default_branch_preserves_a_non_empty_repository_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "checkout"
+
+    def record(command: list[str]) -> str:
+        if command[:2] == ["gh", "api"]:
+            return "1\n"
+        if command[:3] == ["gh", "repo", "clone"]:
+            raise CommandError("gh repo clone: remote branch not found")
+        return ""
+
+    monkeypatch.setattr("repo_cache.src.checkout.run_command", record)
+
+    with pytest.raises(CommandError, match="remote branch not found"):
+        sync_default_branch(
+            repository="owner/non-empty", branch="main", destination=destination
+        )
+
+
+@pytest.mark.parametrize(
+    ("refs_count", "expected_exception", "message"),
+    [
+        ("0\n", EmptyRepositoryError, "has no Git references"),
+        ("1\n", CommandError, "fetch failed"),
+    ],
+)
+def test_sync_default_branch_handles_a_cached_fetch_failure(
+    monkeypatch,
+    tmp_path: Path,
+    refs_count: str,
+    expected_exception: type[Exception],
+    message: str,
+) -> None:
+    destination = tmp_path / "checkout"
+    (destination / ".git").mkdir(parents=True)
+    commands: list[list[str]] = []
+
+    def record(command: list[str]) -> str:
+        commands.append(command)
+        if command[:4] == ["gh", "repo", "view", "owner/repository"]:
+            return "https://github.com/owner/repository\n"
+        if command[-3:] == ["remote", "get-url", "origin"]:
+            return "git@github.com:owner/repository.git\n"
+        if command[3:4] == ["fetch"]:
+            raise CommandError("git fetch failed")
+        if command[:2] == ["gh", "api"]:
+            return refs_count
+        return ""
+
+    monkeypatch.setattr("repo_cache.src.checkout.run_command", record)
+
+    with pytest.raises(expected_exception, match=message):
+        sync_default_branch(
+            repository="owner/repository", branch="main", destination=destination
+        )
+
+    assert commands[-1][:2] == ["gh", "api"]
 
 
 def test_restore_synced_default_branch_never_fetches(
