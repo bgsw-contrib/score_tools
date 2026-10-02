@@ -42,7 +42,7 @@ def score_pytest(name, srcs, args = [], data = [], deps = [], env = {}, plugins 
                args +
                ["-o", "junit_family=xunit1"] +
                plugins +
-               ["$(location %s)" % x for x in srcs],
+               ["$(locations %s)" % x for x in srcs],
         deps = ["@score_tools//score_pytest:attribute_plugin"] + all_requirements + deps,
         data = [
             pytest_config,
