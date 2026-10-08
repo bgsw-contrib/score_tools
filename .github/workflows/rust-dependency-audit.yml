@@ -1,0 +1,77 @@
+# *******************************************************************************
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************
+
+name: Rust Dependency Audit (GitHub Pages)
+
+on:
+  schedule:
+    # Run every Monday at 03:00 UTC
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      organization:
+        description: "GitHub organization to audit"
+        required: true
+        default: "eclipse-score"
+        type: string
+      reference_repo:
+        description: "Central source-of-truth score-crates repository"
+        required: true
+        default: "eclipse-score/score-crates"
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  audit-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Run Rust Dependency Audit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ORG="${{ inputs.organization || 'eclipse-score' }}"
+          REF_REPO="${{ inputs.reference_repo || 'eclipse-score/score-crates' }}"
+          uv run score-rust-dependency-audit \
+            --org "$ORG" \
+            --reference-repo "$REF_REPO" \
+            --output-dir public \
+            --markdown-output "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
