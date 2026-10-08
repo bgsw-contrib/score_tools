@@ -11,9 +11,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************
 
-name: Rust Dependency Audit (GitHub Pages)
+name: Rust Dependency Audit
 
 on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
+      - "feat/**"
   schedule:
     # Run every Monday at 03:00 UTC
     - cron: "0 3 * * 1"
@@ -32,18 +38,10 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 jobs:
-  audit-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  audit:
+    name: Audit Rust Dependencies
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -72,14 +70,24 @@ jobs:
           path: public/
           retention-days: 30
 
-      - name: Setup GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload GitHub Pages artifact
+      - name: Upload Pages Artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: audit
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
