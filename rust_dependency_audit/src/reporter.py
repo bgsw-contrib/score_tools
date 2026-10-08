@@ -92,6 +92,14 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
         "",
         "---",
         "",
+        "## Terminology & Classification Guide",
+        "",
+        "- 🟢 **`MANAGED`**: The crate is officially registered and maintained in [`eclipse-score/score-crates`](https://github.com/eclipse-score/score-crates) (the central source of truth), and the repository requested version matches the centralized version.",
+        "- 🟡 **`VERSION_MISMATCH`**: The crate is registered in `score-crates`, but this repository specifies or locks a **different version** (e.g. repository uses `4.5.37` while `score-crates` provides `4.5.4`). **Action:** Align the repository dependency or update `score-crates` so all S-CORE modules share a unified version.",
+        "- 🔴 **`UNMANAGED`**: The crate is used by the repository as a direct external dependency, but is **NOT yet registered** in `score-crates`. **Action:** Onboard this crate into `score-crates` via `crate.spec()` in `MODULE.bazel` to establish central tracking.",
+        "",
+        "---",
+        "",
         "## Repositories Overview",
         "",
         "| Repository | Projects | Total Crates | Status Breakdown | Compliance |",
@@ -381,6 +389,15 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
         <div class="card-title">Compliance Rate</div>
         <div class="card-value">{managed_pct}%</div>
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px; border-left: 4px solid var(--accent);">
+      <div style="font-weight: 600; font-size: 16px; margin-bottom: 8px; color: #f0f6fc;">💡 Terminology & Classification Guide</div>
+      <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px;">
+        <li><span class="badge badge-managed">MANAGED</span> <strong>Registered & Aligned:</strong> The crate is defined in <code>score-crates</code> (central single source of truth) and the repository's requested version matches.</li>
+        <li><span class="badge badge-mismatch">VERSION_MISMATCH</span> <strong>Version Discrepancy:</strong> The crate is in <code>score-crates</code>, but this repository specifies or locks a different version. <em>Action: Align repository dependency or update score-crates.</em></li>
+        <li><span class="badge badge-unmanaged">UNMANAGED</span> <strong>Missing from score-crates:</strong> The crate is used as a direct external dependency but is not yet registered in <code>score-crates</code>. <em>Action: Onboard crate into score-crates via crate.spec().</em></li>
+      </ul>
     </div>
 
     <div class="controls">

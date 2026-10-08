@@ -64,6 +64,14 @@ jobs:
             --output-dir public \
             --markdown-output "$GITHUB_STEP_SUMMARY"
 
+      - name: 📦 Upload Audit Reports to Workflow Run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-dependency-audit-reports
+          path: public/
+          retention-days: 30
+
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
 
