@@ -92,11 +92,39 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
         "",
         "---",
         "",
-        "## Crate Usage Overview",
+        "## Repositories Overview",
         "",
-        "| Crate | Status | `score-crates` Version | Repositories Using | Versions Requested |",
-        "| :--- | :---: | :---: | :--- | :--- |",
+        "| Repository | Projects | Total Crates | Status Breakdown | Compliance |",
+        "| :--- | :---: | :---: | :--- | :---: |",
     ]
+
+    for repo in sorted(report.repositories, key=lambda r: r.repo_name):
+        total_repo_crates = len(repo.crates)
+        pct = (
+            round((repo.managed_crates_count / total_repo_crates) * 100, 1)
+            if total_repo_crates > 0
+            else 0
+        )
+        breakdown = (
+            f"**{repo.managed_crates_count}** managed, "
+            f"**{repo.mismatch_crates_count}** mismatch, "
+            f"**{repo.unmanaged_crates_count}** unmanaged"
+        )
+        lines.append(
+            f"| **`{repo.repo_name}`** | {len(repo.project_paths)} | {total_repo_crates} | {breakdown} | {pct}% |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Crate Usage Overview",
+            "",
+            "| Crate | Status | `score-crates` Version | Repositories Using | Versions Requested |",
+            "| :--- | :---: | :---: | :--- | :--- |",
+        ]
+    )
 
     for crate_name, usage in sorted(report.crate_usage_summary.items()):
         status_badge = f"`{usage.status.value}`"
@@ -365,6 +393,21 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
       </div>
     </div>
 
+    <div class="section-title">📂 Repositories Overview</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Repository</th>
+          <th>Rust Projects</th>
+          <th>Total Crates</th>
+          <th>Status Breakdown</th>
+          <th>Compliance</th>
+        </tr>
+      </thead>
+      <tbody id="reposOverviewBody">
+      </tbody>
+    </table>
+
     <div class="section-title">📦 Crates Usage Overview</div>
     <table>
       <thead>
@@ -380,7 +423,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
       </tbody>
     </table>
 
-    <div class="section-title">📂 Repository Breakdown</div>
+    <div class="section-title">📑 Detailed Repository Breakdown</div>
     <div id="reposContainer"></div>
   </div>
 
@@ -401,8 +444,39 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
 
     function filterData() {{
       const query = document.getElementById('searchInput').value.toLowerCase().trim();
+      renderReposOverview(query, currentStatus);
       renderCrates(query, currentStatus);
       renderRepos(query, currentStatus);
+    }}
+
+    function renderReposOverview(query, statusFilter) {{
+      const tbody = document.getElementById('reposOverviewBody');
+      tbody.innerHTML = '';
+
+      for (const repo of reportData.repositories) {{
+        const matchesQuery = !query || repo.repo_name.toLowerCase().includes(query) || repo.crates.some(c => c.crate_name.toLowerCase().includes(query));
+        if (!matchesQuery) continue;
+
+        const filteredCrates = repo.crates.filter(c => statusFilter === 'ALL' || c.status === statusFilter);
+        if (statusFilter !== 'ALL' && filteredCrates.length === 0) continue;
+
+        const totalCrates = repo.crates.length;
+        const compliance = totalCrates > 0 ? Math.round((repo.managed_crates_count / totalCrates) * 1000) / 10 : 0;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="#repo-${{repo.repo_name}}" style="color: var(--accent); text-decoration: none; font-weight: 600;">${{repo.repo_name}}</a></td>
+          <td><code>${{repo.project_paths.length}}</code></td>
+          <td><strong>${{totalCrates}}</strong></td>
+          <td>
+            <span class="badge badge-managed">${{repo.managed_crates_count}} managed</span>
+            <span class="badge badge-mismatch">${{repo.mismatch_crates_count}} mismatch</span>
+            <span class="badge badge-unmanaged">${{repo.unmanaged_crates_count}} unmanaged</span>
+          </td>
+          <td><strong>${{compliance}}%</strong></td>
+        `;
+        tbody.appendChild(tr);
+      }}
     }}
 
     function renderCrates(query, statusFilter) {{
@@ -444,6 +518,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
 
         const card = document.createElement('div');
         card.className = 'repo-card';
+        card.id = `repo-${{repo.repo_name}}`;
 
         let cratesRows = filteredCrates.map(c => {{
           const badgeClass = c.status === 'MANAGED' ? 'badge-managed' : (c.status === 'VERSION_MISMATCH' ? 'badge-mismatch' : 'badge-unmanaged');

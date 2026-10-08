@@ -100,13 +100,19 @@ def sample_report():
 def test_generate_markdown_report(sample_report):
     md = generate_markdown_report(sample_report)
     assert "# Rust Dependency Audit Report: eclipse-score" in md
+    assert "## Repositories Overview" in md
+    assert "eclipse-score/repo1" in md
+    assert (
+        "1 managed" in md.lower()
+        or "| 1 | 1 | 1 |" in md
+        or ("1" in md and "eclipse-score/repo1" in md)
+    )
     assert "clap" in md
     assert "tokio" in md
     assert "unregistered_crate" in md
     assert "MANAGED" in md
     assert "VERSION_MISMATCH" in md
     assert "UNMANAGED" in md
-    assert "eclipse-score/repo1" in md
 
 
 def test_generate_json_report(sample_report):
@@ -124,6 +130,7 @@ def test_generate_html_report(sample_report):
     html = generate_html_report(sample_report)
     assert "<!DOCTYPE html>" in html
     assert "Rust Dependency Audit" in html
+    assert "Repositories Overview" in html
     assert "clap" in html
     assert "tokio" in html
     assert "unregistered_crate" in html

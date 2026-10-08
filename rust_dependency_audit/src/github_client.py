@@ -135,8 +135,10 @@ class GitHubClient:
     def get_file_content(
         self, owner: str, repo: str, path: str, branch: str = "main"
     ) -> str | None:
-        """Retrieves raw content of a file from a repository."""
-        # Raw URL is fast and directly returns text
+        """Retrieves content of a file from a repository with retry and API fallback."""
+        import base64
+        import time
+
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
         headers = {
             "User-Agent": "score-rust-dependency-audit",
@@ -144,13 +146,25 @@ class GitHubClient:
         if self._token:
             headers["Authorization"] = f"token {self._token}"
 
-        req = urllib.request.Request(url, headers=headers)
+        for attempt in range(3):
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return resp.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    break
+                time.sleep(0.5 * (attempt + 1))
+            except Exception:
+                time.sleep(0.5 * (attempt + 1))
+
+        # Fallback to GitHub REST API /repos/{owner}/{repo}/contents/{path}
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return None
-            return None
+            data = self._request(f"repos/{owner}/{repo}/contents/{path}?ref={branch}")
+            if data and isinstance(data, dict) and "content" in data:
+                raw_bytes = base64.b64decode(data["content"])
+                return raw_bytes.decode("utf-8")
         except Exception:
-            return None
+            pass
+
+        return None
