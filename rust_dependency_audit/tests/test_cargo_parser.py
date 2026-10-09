@@ -102,12 +102,31 @@ def test_parse_cargo_toml_standard_package():
 
     assert "external_git" in deps_by_name
     assert deps_by_name["external_git"].is_git is True
+    assert deps_by_name["external_git"].git_url == "https://github.com/foo/bar.git"
+    assert deps_by_name["external_git"].git_rev == "12345"
 
     assert "mockall" in deps_by_name
     assert deps_by_name["mockall"].dep_type == "dev"
 
     assert "cc" in deps_by_name
     assert deps_by_name["cc"].dep_type == "build"
+
+
+def test_parse_cargo_toml_renamed_package():
+    content = """
+[package]
+name = "renamer"
+version = "0.1.0"
+
+[dependencies]
+logging = { package = "log", version = "0.4.27" }
+"""
+    pkg = parse_cargo_toml(content, path="Cargo.toml")
+    assert len(pkg.dependencies) == 1
+    dep = pkg.dependencies[0]
+    assert dep.name == "log"
+    assert dep.alias == "logging"
+    assert dep.version_req == "0.4.27"
 
 
 def test_parse_cargo_toml_workspace_root():

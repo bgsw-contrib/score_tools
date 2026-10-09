@@ -59,8 +59,10 @@ jobs:
           uv run score-rust-dependency-audit \
             --org "$ORG" \
             --reference-repo "$REF_REPO" \
-            --output-dir public \
-            --markdown-output "$GITHUB_STEP_SUMMARY"
+            --output-dir public
+          if [ -f "public/rust_dependency_audit.md" ] && [ -n "$GITHUB_STEP_SUMMARY" ]; then
+            cat public/rust_dependency_audit.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 📦 Upload Audit Reports to Workflow Run
         if: always()

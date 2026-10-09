@@ -26,6 +26,7 @@ def generate_json_report(report: OrganizationAuditReport) -> str:
     """Serializes the audit report into formatted JSON."""
     data = {
         "organization": report.organization,
+        "reference_repo": report.reference_repo,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "total_repositories": report.total_repositories,
         "rust_repositories_count": report.rust_repositories_count,
@@ -73,11 +74,17 @@ def generate_json_report(report: OrganizationAuditReport) -> str:
 
 def generate_markdown_report(report: OrganizationAuditReport) -> str:
     """Generates a clean Markdown report summarizing the audit."""
+    ref_repo = report.reference_repo or "eclipse-score/score-crates"
+    ref_url = (
+        ref_repo if ref_repo.startswith("http") else f"https://github.com/{ref_repo}"
+    )
+    ref_short = ref_repo.split("/")[-1]
+
     lines: list[str] = [
         f"# Rust Dependency Audit Report: {report.organization or 'Organization'}",
         "",
         f"> **Generated at:** `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`  ",
-        "> **Central Reference:** [`eclipse-score/score-crates`](https://github.com/eclipse-score/score-crates)",
+        f"> **Central Reference:** [`{ref_repo}`]({ref_url})",
         "",
         "## Executive Summary",
         "",
@@ -86,7 +93,7 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
         f"| **Total Repositories Scanned** | {report.total_repositories} |",
         f"| **Repositories using Rust** | {report.rust_repositories_count} |",
         f"| **Total Distinct Crates** | {report.total_distinct_crates} |",
-        f"| **Managed in score-crates** | {report.managed_crates_count} |",
+        f"| **Managed in {ref_short}** | {report.managed_crates_count} |",
         f"| **Version Mismatches** | {report.mismatch_crates_count} |",
         f"| **Unmanaged Crates** | {report.unmanaged_crates_count} |",
         "",
@@ -94,9 +101,9 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
         "",
         "## Terminology & Classification Guide",
         "",
-        "- 🟢 **`MANAGED`**: The crate is officially registered and maintained in [`eclipse-score/score-crates`](https://github.com/eclipse-score/score-crates) (the central source of truth), and the repository requested version matches the centralized version.",
-        "- 🟡 **`VERSION_MISMATCH`**: The crate is registered in `score-crates`, but this repository specifies or locks a **different version** (e.g. repository uses `4.5.37` while `score-crates` provides `4.5.4`). **Action:** Align the repository dependency or update `score-crates` so all S-CORE modules share a unified version.",
-        "- 🔴 **`UNMANAGED`**: The crate is used by the repository as a direct external dependency, but is **NOT yet registered** in `score-crates`. **Action:** Onboard this crate into `score-crates` via `crate.spec()` in `MODULE.bazel` to establish central tracking.",
+        f"- 🟢 **`MANAGED`**: The crate is officially registered and maintained in [`{ref_repo}`]({ref_url}) (the central source of truth), and the repository requested version matches the centralized version.",
+        f"- 🟡 **`VERSION_MISMATCH`**: The crate is registered in `{ref_short}`, but this repository specifies or locks a **different version** (e.g. repository uses `4.5.37` while `{ref_short}` provides `4.5.4`). **Action:** Align the repository dependency or update `{ref_short}` so all S-CORE modules share a unified version.",
+        f"- 🔴 **`UNMANAGED`**: The crate is used by the repository as a direct external dependency, but is **NOT yet registered** in `{ref_short}`. **Action:** Onboard this crate into `{ref_short}` via `crate.spec()` in `MODULE.bazel` to establish central tracking.",
         "",
         "---",
         "",
@@ -129,7 +136,7 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
             "",
             "## Crate Usage Overview",
             "",
-            "| Crate | Status | `score-crates` Version | Repositories Using | Versions Requested |",
+            f"| Crate | Status | `{ref_short}` Version | Repositories Using | Versions Requested |",
             "| :--- | :---: | :---: | :--- | :--- |",
         ]
     )
@@ -178,7 +185,7 @@ def generate_markdown_report(report: OrganizationAuditReport) -> str:
         )
         lines.append("")
         lines.append(
-            "| Crate | Status | Requested | Resolved | `score-crates` | Manifest |"
+            f"| Crate | Status | Requested | Resolved | `{ref_short}` | Manifest |"
         )
         lines.append("| :--- | :---: | :---: | :---: | :---: | :--- |")
 
@@ -203,6 +210,14 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
     org_title = html.escape(report.organization or "Eclipse S-CORE")
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+    ref_repo = report.reference_repo or "eclipse-score/score-crates"
+    ref_url = (
+        ref_repo if ref_repo.startswith("http") else f"https://github.com/{ref_repo}"
+    )
+    ref_name_escaped = html.escape(ref_repo)
+    ref_url_escaped = html.escape(ref_url)
+    ref_short_escaped = html.escape(ref_repo.split("/")[-1])
+
     # Metrics
     total_crates = report.total_distinct_crates
     managed_pct = (
@@ -213,6 +228,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
 
     # Convert report to JSON for client-side search/filtering
     json_data = generate_json_report(report)
+    json_safe = json_data.replace("<", "\\u003c")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -355,7 +371,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
   <header>
     <h1>🦀 Rust Dependency Audit — {org_title}</h1>
     <div class="meta">
-      Generated: <strong>{timestamp}</strong> | Central Single Source of Truth: <a href="https://github.com/eclipse-score/score-crates" target="_blank" style="color: var(--accent);">eclipse-score/score-crates</a>
+      Generated: <strong>{timestamp}</strong> | Central Single Source of Truth: <a href="{ref_url_escaped}" target="_blank" style="color: var(--accent);">{ref_name_escaped}</a>
     </div>
   </header>
 
@@ -374,7 +390,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
         <div class="card-value">{report.total_distinct_crates}</div>
       </div>
       <div class="card">
-        <div class="card-title">Managed in score-crates</div>
+        <div class="card-title">Managed in {ref_short_escaped}</div>
         <div class="card-value" style="color: var(--success);">{report.managed_crates_count}</div>
       </div>
       <div class="card">
@@ -394,9 +410,9 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
     <div class="card" style="margin-bottom: 24px; border-left: 4px solid var(--accent);">
       <div style="font-weight: 600; font-size: 16px; margin-bottom: 8px; color: #f0f6fc;">💡 Terminology & Classification Guide</div>
       <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px;">
-        <li><span class="badge badge-managed">MANAGED</span> <strong>Registered & Aligned:</strong> The crate is defined in <code>score-crates</code> (central single source of truth) and the repository's requested version matches.</li>
-        <li><span class="badge badge-mismatch">VERSION_MISMATCH</span> <strong>Version Discrepancy:</strong> The crate is in <code>score-crates</code>, but this repository specifies or locks a different version. <em>Action: Align repository dependency or update score-crates.</em></li>
-        <li><span class="badge badge-unmanaged">UNMANAGED</span> <strong>Missing from score-crates:</strong> The crate is used as a direct external dependency but is not yet registered in <code>score-crates</code>. <em>Action: Onboard crate into score-crates via crate.spec().</em></li>
+        <li><span class="badge badge-managed">MANAGED</span> <strong>Registered & Aligned:</strong> The crate is defined in <code>{ref_short_escaped}</code> (central single source of truth) and the repository's requested version matches.</li>
+        <li><span class="badge badge-mismatch">VERSION_MISMATCH</span> <strong>Version Discrepancy:</strong> The crate is in <code>{ref_short_escaped}</code>, but this repository specifies or locks a different version. <em>Action: Align repository dependency or update {ref_short_escaped}.</em></li>
+        <li><span class="badge badge-unmanaged">UNMANAGED</span> <strong>Missing from {ref_short_escaped}:</strong> The crate is used as a direct external dependency but is not yet registered in <code>{ref_short_escaped}</code>. <em>Action: Onboard crate into {ref_short_escaped} via crate.spec().</em></li>
       </ul>
     </div>
 
@@ -431,7 +447,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
         <tr>
           <th>Crate Name</th>
           <th>Status</th>
-          <th><code>score-crates</code> Version</th>
+          <th><code>{ref_short_escaped}</code> Version</th>
           <th>Used in Repositories</th>
           <th>Requested Versions</th>
         </tr>
@@ -445,10 +461,20 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
   </div>
 
   <script id="audit-data" type="application/json">
-{json_data}
+{json_safe}
   </script>
 
   <script>
+    function escapeHtml(str) {{
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }}
+
     const reportData = JSON.parse(document.getElementById('audit-data').textContent);
     let currentStatus = 'ALL';
 
@@ -481,8 +507,9 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
         const compliance = totalCrates > 0 ? Math.round((repo.managed_crates_count / totalCrates) * 1000) / 10 : 0;
 
         const tr = document.createElement('tr');
+        const safeRepoName = escapeHtml(repo.repo_name);
         tr.innerHTML = `
-          <td><a href="#repo-${{repo.repo_name}}" style="color: var(--accent); text-decoration: none; font-weight: 600;">${{repo.repo_name}}</a></td>
+          <td><a href="#repo-${{safeRepoName}}" style="color: var(--accent); text-decoration: none; font-weight: 600;">${{safeRepoName}}</a></td>
           <td><code>${{repo.project_paths.length}}</code></td>
           <td><strong>${{totalCrates}}</strong></td>
           <td>
@@ -511,12 +538,17 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
         const tr = document.createElement('tr');
         const badgeClass = item.status === 'MANAGED' ? 'badge-managed' : (item.status === 'VERSION_MISMATCH' ? 'badge-mismatch' : 'badge-unmanaged');
 
+        const safeCrate = escapeHtml(crateName);
+        const safeScoreVer = item.score_crates_version ? '<code>' + escapeHtml(item.score_crates_version) + '</code>' : '-';
+        const safeRepos = item.used_in_repos.map(r => '<code>' + escapeHtml(r.split('/').pop()) + '</code>').join(', ');
+        const safeVersions = item.versions_seen.map(v => '<code>' + escapeHtml(v) + '</code>').join(', ') || '-';
+
         tr.innerHTML = `
-          <td><strong>${{crateName}}</strong></td>
-          <td><span class="badge ${{badgeClass}}">${{item.status}}</span></td>
-          <td>${{item.score_crates_version ? '<code>' + item.score_crates_version + '</code>' : '-'}}</td>
-          <td>${{item.used_in_repos.map(r => '<code>' + r.split('/').pop() + '</code>').join(', ')}}</td>
-          <td>${{item.versions_seen.map(v => '<code>' + v + '</code>').join(', ') || '-'}}</td>
+          <td><strong>${{safeCrate}}</strong></td>
+          <td><span class="badge ${{badgeClass}}">${{escapeHtml(item.status)}}</span></td>
+          <td>${{safeScoreVer}}</td>
+          <td>${{safeRepos}}</td>
+          <td>${{safeVersions}}</td>
         `;
         tbody.appendChild(tr);
       }}
@@ -535,32 +567,40 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
 
         const card = document.createElement('div');
         card.className = 'repo-card';
-        card.id = `repo-${{repo.repo_name}}`;
+        card.id = `repo-${{escapeHtml(repo.repo_name)}}`;
 
         let cratesRows = filteredCrates.map(c => {{
           const badgeClass = c.status === 'MANAGED' ? 'badge-managed' : (c.status === 'VERSION_MISMATCH' ? 'badge-mismatch' : 'badge-unmanaged');
+          const safeCrate = escapeHtml(c.crate_name);
+          const safeReq = c.requested_version ? '<code>' + escapeHtml(c.requested_version) + '</code>' : '-';
+          const safeRes = c.resolved_version ? '<code>' + escapeHtml(c.resolved_version) + '</code>' : '-';
+          const safeScore = c.score_crates_version ? '<code>' + escapeHtml(c.score_crates_version) + '</code>' : '-';
+          const safeManifests = c.manifest_paths.map(m => '<code>' + escapeHtml(m) + '</code>').join(', ');
           return `
             <tr>
-              <td><strong>${{c.crate_name}}</strong></td>
-              <td><span class="badge ${{badgeClass}}">${{c.status}}</span></td>
-              <td>${{c.requested_version ? '<code>' + c.requested_version + '</code>' : '-'}}</td>
-              <td>${{c.resolved_version ? '<code>' + c.resolved_version + '</code>' : '-'}}</td>
-              <td>${{c.score_crates_version ? '<code>' + c.score_crates_version + '</code>' : '-'}}</td>
-              <td>${{c.manifest_paths.map(m => '<code>' + m + '</code>').join(', ')}}</td>
+              <td><strong>${{safeCrate}}</strong></td>
+              <td><span class="badge ${{badgeClass}}">${{escapeHtml(c.status)}}</span></td>
+              <td>${{safeReq}}</td>
+              <td>${{safeRes}}</td>
+              <td>${{safeScore}}</td>
+              <td>${{safeManifests}}</td>
             </tr>
           `;
         }}).join('');
 
+        const safeRepo = escapeHtml(repo.repo_name);
+        const safePaths = repo.project_paths.map(p => '<code>' + escapeHtml(p) + '</code>').join(', ');
+
         card.innerHTML = `
           <div class="repo-header">
-            <span class="repo-name">${{repo.repo_name}}</span>
+            <span class="repo-name">${{safeRepo}}</span>
             <div>
               <span class="badge badge-managed">${{repo.managed_crates_count}} managed</span>
               <span class="badge badge-mismatch">${{repo.mismatch_crates_count}} mismatch</span>
               <span class="badge badge-unmanaged">${{repo.unmanaged_crates_count}} unmanaged</span>
             </div>
           </div>
-          <div class="paths-list">Project paths: ${{repo.project_paths.map(p => '<code>' + p + '</code>').join(', ')}}</div>
+          <div class="paths-list">Project paths: ${{safePaths}}</div>
           <table>
             <thead>
               <tr>
@@ -568,7 +608,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
                 <th>Status</th>
                 <th>Requested</th>
                 <th>Resolved</th>
-                <th>score-crates</th>
+                <th>${{escapeHtml('{ref_short_escaped}')}}</th>
                 <th>Manifest</th>
               </tr>
             </thead>

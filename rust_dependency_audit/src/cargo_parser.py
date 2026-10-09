@@ -31,6 +31,9 @@ class DeclaredDependency:
     is_git: bool = False
     is_path: bool = False
     dep_type: str = "normal"  # "normal", "dev", "build"
+    git_url: str | None = None
+    git_rev: str | None = None
+    alias: str | None = None
 
 
 @dataclass
@@ -64,20 +67,27 @@ def _parse_dep_spec(name: str, spec: Any, dep_type: str) -> DeclaredDependency:
         )
 
     if isinstance(spec, dict):
+        actual_name = str(spec.get("package", name))
+        alias = name if actual_name != name else None
         version_req = spec.get("version")
         features = list(spec.get("features", []))
         is_workspace = spec.get("workspace", False) is True
-        is_git = "git" in spec
+        git_url = spec.get("git")
+        git_rev = spec.get("rev") or spec.get("tag") or spec.get("branch")
+        is_git = bool(git_url or "git" in spec)
         is_path = "path" in spec
 
         return DeclaredDependency(
-            name=name,
+            name=actual_name,
             version_req=str(version_req) if version_req is not None else None,
             features=features,
             is_workspace=is_workspace,
             is_git=is_git,
             is_path=is_path,
             dep_type=dep_type,
+            git_url=str(git_url) if git_url is not None else None,
+            git_rev=str(git_rev) if git_rev is not None else None,
+            alias=alias,
         )
 
     return DeclaredDependency(name=name, dep_type=dep_type)

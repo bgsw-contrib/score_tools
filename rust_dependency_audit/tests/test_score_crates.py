@@ -31,6 +31,7 @@ crate.spec(
 )
 crate.spec(
     package = "libc",
+    # Exact pin (not a caret/minimum requirement):
     version = "=0.2.186",
 )
 crate.spec(

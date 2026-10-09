@@ -132,6 +132,19 @@ def main(argv: list[str] | None = None) -> int:
         build_bazel = client.get_file_content(owner, repo, "BUILD") or ""
         score_crates_ref = build_score_crates_reference(mod_bazel, build_bazel)
 
+    ref_label = args.reference_repo or (
+        str(args.local_reference_dir)
+        if args.local_reference_dir
+        else "eclipse-score/score-crates"
+    )
+    if not score_crates_ref.crates and not score_crates_ref.aliases:
+        print(
+            f"[!] Error: No crates found in reference '{ref_label}'. "
+            "Audit aborted to prevent false organization-wide results.",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"    - Discovered {len(score_crates_ref.crates)} approved crates in score-crates."
     )
@@ -144,12 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[*] Scanning local repositories in {base_p}...")
         for child in sorted(base_p.iterdir()):
             if child.is_dir() and not child.name.startswith("."):
-                # Check if it has any Cargo files
-                has_cargo = any(child.rglob("Cargo.toml")) or any(
-                    child.rglob("Cargo.lock")
-                )
-                if has_cargo:
-                    repos_data.append(_collect_local_repo_data(child))
+                repos_data.append(_collect_local_repo_data(child))
     else:
         client = GitHubClient()
         print(f"[*] Fetching repository list for organization: {args.org}...")
@@ -171,6 +179,12 @@ def main(argv: list[str] | None = None) -> int:
             cargo_lock_paths = [p for p in tree_paths if p.endswith("Cargo.lock")]
 
             if not cargo_toml_paths and not cargo_lock_paths:
+                repos_data.append(
+                    RepositoryAuditData(
+                        name=f"{args.org}/{repo_name}",
+                        is_archived=is_archived,
+                    )
+                )
                 continue
 
             print(
@@ -215,50 +229,56 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     # 3. Perform audit
-    print(f"[*] Auditing {len(repos_data)} repositories with Rust manifests...")
-    report = audit_organization(repos_data, score_crates_ref)
+    print(f"[*] Auditing {len(repos_data)} repositories...")
+    report = audit_organization(repos_data, score_crates_ref, reference_repo=ref_label)
     report.organization = args.org
 
     # 4. Generate outputs
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html_file = Path(args.html_output) if args.html_output else out_dir / "index.html"
-    json_file = (
-        Path(args.json_output)
-        if args.json_output
-        else out_dir / "rust_dependency_audit.json"
-    )
-    md_file = (
-        Path(args.markdown_output)
-        if args.markdown_output
-        else out_dir / "rust_dependency_audit.md"
-    )
+    default_html_file = out_dir / "index.html"
+    default_json_file = out_dir / "rust_dependency_audit.json"
+    default_md_file = out_dir / "rust_dependency_audit.md"
 
-    html_file.parent.mkdir(parents=True, exist_ok=True)
-    json_file.parent.mkdir(parents=True, exist_ok=True)
-    md_file.parent.mkdir(parents=True, exist_ok=True)
+    html_file = Path(args.html_output) if args.html_output else default_html_file
+    json_file = Path(args.json_output) if args.json_output else default_json_file
+    md_file = Path(args.markdown_output) if args.markdown_output else default_md_file
 
     html_content = generate_html_report(report)
     json_content = generate_json_report(report)
     md_content = generate_markdown_report(report)
 
-    html_file.write_text(html_content, encoding="utf-8")
-    json_file.write_text(json_content, encoding="utf-8")
-    md_file.write_text(md_content, encoding="utf-8")
+    # Always write outputs to default directory so full bundle is retained
+    default_html_file.write_text(html_content, encoding="utf-8")
+    default_json_file.write_text(json_content, encoding="utf-8")
+    default_md_file.write_text(md_content, encoding="utf-8")
+
+    # If custom paths were specified, also write there
+    if html_file != default_html_file:
+        html_file.parent.mkdir(parents=True, exist_ok=True)
+        html_file.write_text(html_content, encoding="utf-8")
+    if json_file != default_json_file:
+        json_file.parent.mkdir(parents=True, exist_ok=True)
+        json_file.write_text(json_content, encoding="utf-8")
+    if md_file != default_md_file:
+        md_file.parent.mkdir(parents=True, exist_ok=True)
+        md_file.write_text(md_content, encoding="utf-8")
 
     print("\n" + "=" * 60)
     print("🎯 Rust Dependency Audit Complete!")
     print(f"Total Repositories Scanned : {report.total_repositories}")
     print(f"Rust Repositories Found    : {report.rust_repositories_count}")
     print(f"Total Distinct Crates      : {report.total_distinct_crates}")
-    print(f"Managed in score-crates    : {report.managed_crates_count}")
+    print(f"Managed in {ref_label.split('/')[-1]}    : {report.managed_crates_count}")
     print(f"Version Mismatches         : {report.mismatch_crates_count}")
     print(f"Unmanaged Crates           : {report.unmanaged_crates_count}")
     print("-" * 60)
-    print(f"HTML (GitHub Pages) Report : {html_file}")
-    print(f"JSON Report                : {json_file}")
-    print(f"Markdown Report            : {md_file}")
+    print(f"HTML (GitHub Pages) Report : {default_html_file}")
+    print(f"JSON Report                : {default_json_file}")
+    print(f"Markdown Report            : {default_md_file}")
+    if md_file != default_md_file:
+        print(f"Custom Markdown Output     : {md_file}")
     print("=" * 60 + "\n")
 
     return 0

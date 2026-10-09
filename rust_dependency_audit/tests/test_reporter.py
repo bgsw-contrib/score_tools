@@ -142,3 +142,33 @@ def test_generate_html_report(sample_report):
         "token" not in html.lower() or "token" in "score_crates"
     )  # only legitimate words
     assert "ghp_" not in html
+
+
+def test_custom_reference_repo_in_reports(sample_report):
+    sample_report.reference_repo = "custom-org/my-crates"
+    md = generate_markdown_report(sample_report)
+    assert "custom-org/my-crates" in md
+    assert "https://github.com/custom-org/my-crates" in md
+
+    html_out = generate_html_report(sample_report)
+    assert "custom-org/my-crates" in html_out
+    assert "https://github.com/custom-org/my-crates" in html_out
+
+    json_str = generate_json_report(sample_report)
+    assert json.loads(json_str)["reference_repo"] == "custom-org/my-crates"
+
+
+def test_html_report_xss_safety(sample_report):
+    sample_report.repositories[0].crates.append(
+        AuditedCrate(
+            crate_name="</script><script>alert('xss')</script>",
+            status=CrateStatus.UNMANAGED,
+            manifest_paths=["<img src=x onerror=alert(1)>"],
+        )
+    )
+    html_out = generate_html_report(sample_report)
+    # Raw closing script tag must not exist inside the data payload
+    assert "</script><script>alert('xss')</script>" not in html_out
+    # Instead, < should be escaped to \u003c in json script tag
+    assert "\\u003c/script>\\u003cscript>alert('xss')\\u003c/script>" in html_out
+    assert "escapeHtml" in html_out

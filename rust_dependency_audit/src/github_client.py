@@ -15,10 +15,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -32,6 +34,8 @@ class GitHubClient:
     ):
         self.api_base_url = api_base_url.rstrip("/")
         self._token = token or self._discover_token()
+        # Mapping of (owner, repo) -> {submodule_path: (sub_owner, sub_repo, commit_sha)}
+        self._submodules: dict[tuple[str, str], dict[str, tuple[str, str, str]]] = {}
 
     def __repr__(self) -> str:
         return f"GitHubClient(authenticated={bool(self._token)})"
@@ -116,30 +120,161 @@ class GitHubClient:
 
         return repos
 
-    def get_repo_git_tree(
-        self, owner: str, repo: str, branch: str = "main"
-    ) -> list[str]:
-        """Fetches recursive tree paths for a repository."""
-        endpoint = f"repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+    def _fetch_tree_entries(
+        self, owner: str, repo: str, branch_or_sha: str
+    ) -> list[dict[str, Any]]:
+        """Fetches git tree entries, falling back to manual subtree traversal if truncated."""
+        endpoint = f"repos/{owner}/{repo}/git/trees/{branch_or_sha}?recursive=1"
         data = self._request(endpoint)
         if not data or "tree" not in data:
             return []
 
+        # If not truncated, return all entries directly
+        if not data.get("truncated", False):
+            return list(data.get("tree", []))
+
+        # If truncated, fall back to walking tree nodes level-by-level
+        entries: list[dict[str, Any]] = []
+        root_data = self._request(f"repos/{owner}/{repo}/git/trees/{branch_or_sha}")
+        if not root_data or "tree" not in root_data:
+            return list(data.get("tree", []))
+
+        queue: list[tuple[dict[str, Any], str]] = [
+            (item, "") for item in root_data.get("tree", [])
+        ]
+        while queue:
+            item, prefix = queue.pop(0)
+            item_type = item.get("type")
+            item_path = (
+                f"{prefix}/{item['path']}".lstrip("/")
+                if prefix
+                else item.get("path", "")
+            )
+            item_sha = item.get("sha", "")
+
+            if item_type == "tree":
+                sub_tree = self._request(f"repos/{owner}/{repo}/git/trees/{item_sha}")
+                if sub_tree and "tree" in sub_tree:
+                    for sub_item in sub_tree.get("tree", []):
+                        queue.append((sub_item, item_path))
+            else:
+                entries.append(
+                    {
+                        "path": item_path,
+                        "type": item_type,
+                        "sha": item_sha,
+                        "mode": item.get("mode", ""),
+                    }
+                )
+
+        return entries
+
+    @staticmethod
+    def _parse_gitmodules(content: str) -> dict[str, str]:
+        """Extracts path -> url mapping from .gitmodules content."""
+        mapping: dict[str, str] = {}
+        curr_path = None
+        curr_url = None
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("[submodule"):
+                if curr_path and curr_url:
+                    mapping[curr_path] = curr_url
+                curr_path = None
+                curr_url = None
+            elif line.startswith("path"):
+                parts = line.split("=", 1)
+                if len(parts) == 2:
+                    curr_path = parts[1].strip()
+            elif line.startswith("url"):
+                parts = line.split("=", 1)
+                if len(parts) == 2:
+                    curr_url = parts[1].strip()
+        if curr_path and curr_url:
+            mapping[curr_path] = curr_url
+        return mapping
+
+    @staticmethod
+    def _parse_github_url(
+        url: str, fallback_owner: str
+    ) -> tuple[str | None, str | None]:
+        """Parses git URL into (owner, repo)."""
+        u = url.strip()
+        if u.startswith("../"):
+            repo_name = u[3:].rstrip("/").removesuffix(".git")
+            return fallback_owner, repo_name
+        if "github.com" in u:
+            if ":" in u and not u.startswith("http"):
+                u = u.split(":")[-1]
+            elif "github.com/" in u:
+                u = u.split("github.com/")[-1]
+            parts = u.rstrip("/").removesuffix(".git").split("/")
+            if len(parts) >= 2:
+                return parts[-2], parts[-1]
+        return None, None
+
+    def get_repo_git_tree(
+        self, owner: str, repo: str, branch: str = "main"
+    ) -> list[str]:
+        """Fetches recursive tree paths for a repository including submodules."""
+        tree_entries = self._fetch_tree_entries(owner, repo, branch)
+        if not tree_entries:
+            return []
+
         paths: list[str] = []
-        for item in data.get("tree", []):
-            if item.get("type") == "blob":
-                paths.append(item.get("path", ""))
+        commit_entries: list[dict[str, Any]] = []
+        has_gitmodules = False
+
+        for item in tree_entries:
+            item_type = item.get("type")
+            path = item.get("path", "")
+            if item_type == "blob":
+                paths.append(path)
+                if path == ".gitmodules":
+                    has_gitmodules = True
+            elif item_type == "commit":
+                commit_entries.append(item)
+
+        # Resolve submodules if present
+        if commit_entries and has_gitmodules:
+            gitmodules_content = self.get_file_content(
+                owner, repo, ".gitmodules", branch=branch
+            )
+            if gitmodules_content:
+                submodule_urls = self._parse_gitmodules(gitmodules_content)
+                sub_map: dict[str, tuple[str, str, str]] = {}
+                for item in commit_entries:
+                    sub_path = item.get("path", "")
+                    sub_sha = item.get("sha", "")
+                    url = submodule_urls.get(sub_path)
+                    if url:
+                        sub_owner, sub_repo = self._parse_github_url(
+                            url, fallback_owner=owner
+                        )
+                        if sub_owner and sub_repo:
+                            sub_map[sub_path] = (sub_owner, sub_repo, sub_sha)
+                            try:
+                                sub_entries = self._fetch_tree_entries(
+                                    sub_owner, sub_repo, sub_sha
+                                )
+                                for sub_item in sub_entries:
+                                    if sub_item.get("type") == "blob":
+                                        full_sub_p = (
+                                            f"{sub_path}/{sub_item.get('path', '')}"
+                                        )
+                                        paths.append(full_sub_p)
+                            except Exception:
+                                pass
+                if sub_map:
+                    self._submodules[(owner, repo)] = sub_map
 
         return paths
 
-    def get_file_content(
-        self, owner: str, repo: str, path: str, branch: str = "main"
+    def _fetch_file_content(
+        self, owner: str, repo: str, path: str, branch_or_sha: str
     ) -> str | None:
-        """Retrieves content of a file from a repository with retry and API fallback."""
-        import base64
-        import time
-
-        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+        """Helper to fetch raw file content from GitHub raw or REST API."""
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch_or_sha}/{path}"
         headers = {
             "User-Agent": "score-rust-dependency-audit",
         }
@@ -160,7 +295,9 @@ class GitHubClient:
 
         # Fallback to GitHub REST API /repos/{owner}/{repo}/contents/{path}
         try:
-            data = self._request(f"repos/{owner}/{repo}/contents/{path}?ref={branch}")
+            data = self._request(
+                f"repos/{owner}/{repo}/contents/{path}?ref={branch_or_sha}"
+            )
             if data and isinstance(data, dict) and "content" in data:
                 raw_bytes = base64.b64decode(data["content"])
                 return raw_bytes.decode("utf-8")
@@ -168,3 +305,15 @@ class GitHubClient:
             pass
 
         return None
+
+    def get_file_content(
+        self, owner: str, repo: str, path: str, branch: str = "main"
+    ) -> str | None:
+        """Retrieves content of a file from a repository (or submodule) with retry and API fallback."""
+        sub_info = self._submodules.get((owner, repo), {})
+        for sub_path, (sub_owner, sub_repo, sub_sha) in sub_info.items():
+            if path == sub_path or path.startswith(f"{sub_path}/"):
+                rel_path = path[len(sub_path) + 1 :]
+                return self._fetch_file_content(sub_owner, sub_repo, rel_path, sub_sha)
+
+        return self._fetch_file_content(owner, repo, path, branch)
