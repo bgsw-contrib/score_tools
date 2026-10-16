@@ -15,6 +15,7 @@ from rust_dependency_audit.src.score_crates import (
     parse_score_crates_module_bazel,
     parse_score_crates_build,
     build_score_crates_reference,
+    ScoreCratesReference,
 )
 
 SAMPLE_MODULE_BAZEL = """
@@ -101,3 +102,46 @@ def test_build_score_crates_reference():
     assert ref.contains_crate("iceoryx2-qnx8")
     assert not ref.contains_crate("nonexistent")
     assert ref.get_version("futures") == "0.3.31"
+
+
+def test_ignore_crate_specs_in_comments_and_strings():
+    module_content = """
+# crate.spec(package = "commented_out", version = "1.0.0")
+
+\"\"\"
+DOCSTRING:
+crate.spec(package = "inside_docstring", version = "2.0.0")
+\"\"\"
+
+# Another comment:
+# crate.spec(
+#     package = "multiline_commented",
+#     version = "3.0.0",
+# )
+
+crate.spec(
+    package = "active_crate",
+    # Comment with parenthesis ) inside arguments
+    version = "4.0.0",
+)
+"""
+    specs = parse_score_crates_module_bazel(module_content)
+    assert "active_crate" in specs
+    assert specs["active_crate"].version == "4.0.0"
+    assert "commented_out" not in specs
+    assert "inside_docstring" not in specs
+    assert "multiline_commented" not in specs
+
+
+def test_alias_recursion_guard():
+    ref = ScoreCratesReference(
+        crates={},
+        aliases={
+            "clap": "clap",
+            "cycle_a": "cycle_b",
+            "cycle_b": "cycle_a",
+        },
+    )
+    # Self-referential or circular aliases must return None without RecursionError
+    assert ref.get_spec("clap") is None
+    assert ref.get_spec("cycle_a") is None

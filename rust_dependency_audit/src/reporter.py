@@ -417,7 +417,7 @@ def generate_html_report(report: OrganizationAuditReport) -> str:
     </div>
 
     <div class="controls">
-      <input type="text" id="searchInput" class="search-box" placeholder="Search by crate or repository name..." oninput="filterData()">
+      <input type="text" id="searchInput" class="search-box" placeholder="Search by crate or repository name..." aria-label="Search by crate or repository name" oninput="filterData()">
       <div class="filters">
         <button class="filter-btn active" onclick="setStatusFilter('ALL', this)">All</button>
         <button class="filter-btn" onclick="setStatusFilter('MANAGED', this)">Managed</button>

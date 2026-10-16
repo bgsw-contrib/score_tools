@@ -137,6 +137,8 @@ def test_generate_html_report(sample_report):
     assert "tokio" in html
     assert "unregistered_crate" in html
     assert "eclipse-score/repo1" in html
+    # Ensure search input has persistent accessible name
+    assert 'aria-label="Search by crate or repository name"' in html
     # Ensure no token leaks
     assert (
         "token" not in html.lower() or "token" in "score_crates"

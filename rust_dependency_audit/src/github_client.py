@@ -294,15 +294,12 @@ class GitHubClient:
                 time.sleep(0.5 * (attempt + 1))
 
         # Fallback to GitHub REST API /repos/{owner}/{repo}/contents/{path}
-        try:
-            data = self._request(
-                f"repos/{owner}/{repo}/contents/{path}?ref={branch_or_sha}"
-            )
-            if data and isinstance(data, dict) and "content" in data:
-                raw_bytes = base64.b64decode(data["content"])
-                return raw_bytes.decode("utf-8")
-        except Exception:
-            pass
+        data = self._request(
+            f"repos/{owner}/{repo}/contents/{path}?ref={branch_or_sha}"
+        )
+        if data and isinstance(data, dict) and "content" in data:
+            raw_bytes = base64.b64decode(data["content"])
+            return raw_bytes.decode("utf-8")
 
         return None
 

@@ -114,6 +114,30 @@ def test_cli_empty_reference_fails(tmp_path):
     assert exit_code != 0
 
 
+def test_cli_aliases_only_reference_fails(tmp_path):
+    ref_dir = tmp_path / "aliases-only-score-crates"
+    ref_dir.mkdir()
+    # MODULE.bazel has no parsed crate specifications
+    (ref_dir / "MODULE.bazel").write_text("# No crate.spec calls\n")
+    # BUILD has aliases
+    (ref_dir / "BUILD").write_text(
+        'alias(name = "clap", actual = "@crate_index//:clap")\n'
+    )
+
+    exit_code = main(
+        [
+            "--local-scan-dir",
+            str(tmp_path),
+            "--local-reference-dir",
+            str(ref_dir),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    # Must abort cleanly with non-zero exit code
+    assert exit_code != 0
+
+
 def test_github_client_tree_truncated_fallback():
     client = GitHubClient(token="mock_token")
 
@@ -179,3 +203,21 @@ def test_github_client_submodules_resolution():
             paths = client.get_repo_git_tree("eclipse-score", "main_repo", "main")
             assert ".gitmodules" in paths
             assert "third_party/sub/Cargo.toml" in paths
+
+
+def test_github_client_propagates_rest_errors():
+    import pytest
+    import urllib.error
+
+    client = GitHubClient(token="mock_token")
+
+    def mock_request(endpoint):
+        raise RuntimeError("GitHub API access denied (HTTP 401).")
+
+    with patch.object(client, "_request", side_effect=mock_request):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError("url", 404, "Not Found", None, None),
+        ):
+            with pytest.raises(RuntimeError, match="access denied"):
+                client.get_file_content("owner", "repo", "Cargo.toml")

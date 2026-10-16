@@ -295,3 +295,56 @@ def test_audit_git_dependencies():
     )
     res_bad_rev = audit_repository(repo_bad_rev, score_ref)
     assert res_bad_rev.crates[0].status == CrateStatus.VERSION_MISMATCH
+
+
+def test_audit_merge_lockfile_only_crates_with_declared_dependencies():
+    score_ref = ScoreCratesReference(
+        crates={
+            "clap": ScoreCrateSpec(package="clap", version="4.5.4"),
+            "syn": ScoreCrateSpec(package="syn", version="2.0.68"),
+        }
+    )
+
+    # Repo has 1 direct dependency in Cargo.toml and an internal crate
+    repo = RepositoryAuditData(
+        name="eclipse-score/repo_mixed_lock",
+        cargo_tomls=[
+            CargoTomlPackage(
+                name="my_internal_crate",
+                path="crates/my_internal/Cargo.toml",
+                dependencies=[DeclaredDependency(name="clap", version_req="4.5.4")],
+            )
+        ],
+        cargo_locks=[
+            CargoLockPackage(name="my_internal_crate", version="0.1.0"),
+            CargoLockPackage(name="clap", version="4.5.4"),
+            CargoLockPackage(name="syn", version="2.0.68"),  # transitive managed
+            CargoLockPackage(
+                name="transitive_unmanaged", version="0.5.0"
+            ),  # transitive unmanaged
+        ],
+    )
+
+    res = audit_repository(repo, score_ref)
+    crates_map = {c.crate_name: c for c in res.crates}
+
+    # Internal package should be excluded
+    assert "my_internal_crate" not in crates_map
+
+    # Declared crate should be present with both toml and lock manifest
+    assert "clap" in crates_map
+    assert crates_map["clap"].status == CrateStatus.MANAGED
+    assert "crates/my_internal/Cargo.toml" in crates_map["clap"].manifest_paths
+    assert "Cargo.lock" in crates_map["clap"].manifest_paths
+
+    # Lockfile-only / transitive crates should be merged unconditionally
+    assert "syn" in crates_map
+    assert crates_map["syn"].status == CrateStatus.MANAGED
+    assert crates_map["syn"].resolved_version == "2.0.68"
+    assert crates_map["syn"].dep_types == ["locked"]
+    assert crates_map["syn"].manifest_paths == ["Cargo.lock"]
+
+    assert "transitive_unmanaged" in crates_map
+    assert crates_map["transitive_unmanaged"].status == CrateStatus.UNMANAGED
+    assert crates_map["transitive_unmanaged"].resolved_version == "0.5.0"
+    assert crates_map["transitive_unmanaged"].dep_types == ["locked"]

@@ -137,9 +137,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.local_reference_dir
         else "eclipse-score/score-crates"
     )
-    if not score_crates_ref.crates and not score_crates_ref.aliases:
+    if not score_crates_ref.crates:
         print(
-            f"[!] Error: No crates found in reference '{ref_label}'. "
+            f"[!] Error: No crate specifications found in reference '{ref_label}'. "
             "Audit aborted to prevent false organization-wide results.",
             file=sys.stderr,
         )

@@ -212,22 +212,30 @@ def audit_repository(
             if toml.path:
                 entry["manifests"].add(toml.path)
 
-    # If there are crates in lockfile not in toml (e.g. lockfile-only scan)
-    if not collected_crates and repo_data.cargo_locks:
+    # Merge packages present in Cargo.lock (e.g. transitive or lockfile-only dependencies)
+    if repo_data.cargo_locks:
         for lock in repo_data.cargo_locks:
             if lock.name in internal_crate_names:
                 continue
             if lock.name not in collected_crates:
+                git_urls: set[str] = set()
+                git_revs: set[str] = set()
+                if lock.source and lock.source.startswith("git+"):
+                    raw_git = lock.source[4:]
+                    git_url_part = raw_git.split("#")[0].split("?")[0]
+                    git_urls.add(git_url_part)
+                    if "#" in raw_git:
+                        git_revs.add(raw_git.split("#")[1])
                 collected_crates[lock.name] = {
                     "version_reqs": set(),
-                    "git_urls": set(),
-                    "git_revs": set(),
+                    "git_urls": git_urls,
+                    "git_revs": git_revs,
                     "features": set(),
                     "dep_types": {"locked"},
                     "manifests": {"Cargo.lock"},
                 }
-            if lock.version:
-                collected_crates[lock.name]["version_reqs"].add(lock.version)
+            else:
+                collected_crates[lock.name]["manifests"].add("Cargo.lock")
 
     audited_crates: list[AuditedCrate] = []
     managed_count = 0

@@ -47,8 +47,16 @@ class ScoreCratesReference:
             or normalized in self.aliases
         )
 
-    def get_spec(self, name: str) -> ScoreCrateSpec | None:
-        """Retrieves spec for a crate name or alias."""
+    def get_spec(
+        self, name: str, visited: set[str] | None = None
+    ) -> ScoreCrateSpec | None:
+        """Retrieves spec for a crate name or alias with cycle detection."""
+        if visited is None:
+            visited = set()
+        if name in visited:
+            return None
+        visited.add(name)
+
         normalized = name.replace("-", "_")
         if name in self.crates:
             return self.crates[name]
@@ -57,10 +65,10 @@ class ScoreCratesReference:
         # Check alias
         if name in self.aliases:
             target = self.aliases[name].split(":")[-1]
-            return self.get_spec(target)
+            return self.get_spec(target, visited)
         if normalized in self.aliases:
             target = self.aliases[normalized].split(":")[-1]
-            return self.get_spec(target)
+            return self.get_spec(target, visited)
         return None
 
     def get_version(self, name: str) -> str | None:
@@ -72,58 +80,136 @@ class ScoreCratesReference:
 def _extract_function_calls(content: str, func_name: str) -> list[str]:
     """Extracts argument bodies for calls to func_name(...) handling comments, strings, and nesting."""
     calls: list[str] = []
-    pattern = re.compile(rf"\b{re.escape(func_name)}\s*\(")
-    pos = 0
+    i = 0
     n = len(content)
-    while pos < n:
-        m = pattern.search(content, pos)
-        if not m:
-            break
+    in_string: str | None = None
+    escape = False
 
-        start_paren = m.end() - 1
-        i = start_paren + 1
-        depth = 1
-        in_string: str | None = None
-        escape = False
+    while i < n:
+        ch = content[i]
 
-        while i < n and depth > 0:
-            ch = content[i]
-
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif in_string.startswith('"""') and content[i : i + 3] == '"""':
-                    in_string = None
-                    i += 2
-                elif in_string.startswith("'''") and content[i : i + 3] == "'''":
-                    in_string = None
-                    i += 2
-                elif ch == in_string:
-                    in_string = None
+        if in_string:
+            if escape:
+                escape = False
+                i += 1
+            elif ch == "\\":
+                escape = True
+                i += 1
+            elif in_string.startswith('"""') and content.startswith('"""', i):
+                in_string = None
+                i += 3
+            elif in_string.startswith("'''") and content.startswith("'''", i):
+                in_string = None
+                i += 3
+            elif ch == in_string:
+                in_string = None
+                i += 1
             else:
-                if ch == "#":
-                    next_nl = content.find("\n", i)
-                    if next_nl == -1:
-                        i = n
-                        break
-                    i = next_nl
-                elif content[i : i + 3] in ('"""', "'''"):
-                    in_string = content[i : i + 3]
-                    i += 2
-                elif ch in ('"', "'"):
-                    in_string = ch
-                elif ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0:
-                        calls.append(content[start_paren + 1 : i])
-                        break
-            i += 1
+                i += 1
+            continue
 
-        pos = i + 1
+        # In code (outside string literals)
+        if ch == "#":
+            next_nl = content.find("\n", i)
+            if next_nl == -1:
+                break
+            i = next_nl + 1
+            continue
+
+        if content.startswith('"""', i):
+            in_string = '"""'
+            i += 3
+            continue
+        if content.startswith("'''", i):
+            in_string = "'''"
+            i += 3
+            continue
+        if ch in ('"', "'"):
+            in_string = ch
+            i += 1
+            continue
+
+        # Check for candidate func_name(...) at word boundary
+        is_word_boundary = (i == 0) or (
+            not (content[i - 1].isalnum() or content[i - 1] == "_")
+        )
+        if is_word_boundary and content.startswith(func_name, i):
+            j = i + len(func_name)
+            while j < n and content[j].isspace():
+                j += 1
+            if j < n and content[j] == "(":
+                # Genuine function call found; extract balanced arguments
+                start_args = j + 1
+                k = start_args
+                depth = 1
+                arg_in_string: str | None = None
+                arg_escape = False
+
+                while k < n and depth > 0:
+                    c = content[k]
+                    if arg_in_string:
+                        if arg_escape:
+                            arg_escape = False
+                            k += 1
+                        elif c == "\\":
+                            arg_escape = True
+                            k += 1
+                        elif arg_in_string.startswith('"""') and content.startswith(
+                            '"""', k
+                        ):
+                            arg_in_string = None
+                            k += 3
+                        elif arg_in_string.startswith("'''") and content.startswith(
+                            "'''", k
+                        ):
+                            arg_in_string = None
+                            k += 3
+                        elif c == arg_in_string:
+                            arg_in_string = None
+                            k += 1
+                        else:
+                            k += 1
+                        continue
+
+                    # Inside call arguments, outside string literals
+                    if c == "#":
+                        next_nl = content.find("\n", k)
+                        if next_nl == -1:
+                            break
+                        k = next_nl + 1
+                        continue
+
+                    if content.startswith('"""', k):
+                        arg_in_string = '"""'
+                        k += 3
+                        continue
+                    if content.startswith("'''", k):
+                        arg_in_string = "'''"
+                        k += 3
+                        continue
+                    if c in ('"', "'"):
+                        arg_in_string = c
+                        k += 1
+                        continue
+
+                    if c == "(":
+                        depth += 1
+                        k += 1
+                    elif c == ")":
+                        depth -= 1
+                        if depth == 0:
+                            calls.append(content[start_args:k])
+                            k += 1
+                            break
+                        k += 1
+                    else:
+                        k += 1
+
+                # Continue scanning after the function call
+                i = k
+                continue
+
+        i += 1
 
     return calls
 
