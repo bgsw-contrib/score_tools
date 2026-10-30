@@ -212,6 +212,23 @@ implicitly. `source` is relative to the policy directory and must resolve to a
 regular UTF-8 file without escaping that directory; `path` is a
 repository-relative destination.
 
+### `synchronize_file`
+
+```yaml
+- type: synchronize_file
+  path: .devcontainer/run-tool
+  source: run-tool
+  executable: true
+```
+
+Replaces the complete destination contents with the exact bytes from a
+policy-local source asset. The source must be a file within the policy
+directory; the repository-relative destination may be missing, in which case
+its parent directories are created. When `executable` is `true`, the operation
+ensures the owner execute bit is set on the destination. Group, other, and
+non-execute permission bits are preserved. When omitted or `false`, it leaves
+the destination's execute bits unchanged.
+
 ### `ensure_exact`
 
 ```yaml
@@ -262,18 +279,21 @@ refuses to delete a directory.
 
 ```yaml
 - type: replace_regex
-  path: MODULE.bazel
-  pattern: 'legacy = "([^"]+)"'
-  replacement: 'current = "\1"'
+  path: .github/workflows/*.yml
+  pattern: ubuntu-latest
+  replacement: ubuntu-24.04
 ```
 
 Applies Python `re.sub` semantics to the complete UTF-8 text file: every
 non-overlapping match is replaced, with no implicit flags. Use inline regex
 flags such as `(?s)` when needed. Capture groups in `replacement` use `\1`
 syntax; invalid replacement backreferences are rejected while the policy is
-loaded. A missing file, no match, or replacement that produces identical text
-is compliant. Prefer narrow patterns and cover every intended layout with an
-executable example.
+loaded. `path` may include filename wildcards (`*`, `?`, and `[]`) in its final
+component; the parent directory is a literal repository-relative path. Each
+matching file is evaluated independently and reported by its repository-relative
+path. A missing file, unmatched pattern, no match, or replacement that produces
+identical text is compliant. Prefer narrow patterns and cover every intended
+layout with an executable example.
 
 ### `ensure_minimum_version`
 
